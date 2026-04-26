@@ -1,9 +1,7 @@
 package com.digvijay.bookMyShow.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +11,8 @@ import java.util.List;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(exclude = "shows")
+@ToString(exclude = "shows")
 public class Theatre {
 
     @Id
@@ -31,6 +31,6 @@ public class Theatre {
     @Column(nullable = false)
     private Integer totalSeats;
 
-    @OneToMany(mappedBy = "theatre", cascade = CascadeType.ALL)
+    @OneToMany(mappedBy = "theatre", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Show> shows = new ArrayList<>();
 }

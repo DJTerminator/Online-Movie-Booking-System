@@ -2,7 +2,7 @@ package com.digvijay.bookMyShow.enums;
 
 public enum PaymentStatus {
     PENDING,
-    COMPLETED,
+    SUCCESS,
     FAILED,
     REFUNDED
 }

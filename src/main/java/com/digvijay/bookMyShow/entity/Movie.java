@@ -1,9 +1,7 @@
 package com.digvijay.bookMyShow.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +11,8 @@ import java.util.List;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(exclude = "shows")
+@ToString(exclude = "shows")
 public class Movie {
 
     @Id
@@ -35,8 +35,11 @@ public class Movie {
     private Integer durationMinutes;
 
     @Column(nullable = false)
-    private String rating; // U, UA, A, etc.
+    private String rating;
 
-    @OneToMany(mappedBy = "movie", cascade = CascadeType.ALL)
+    @Column(nullable = false)
+    private Boolean active = true;
+
+    @OneToMany(mappedBy = "movie", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Show> shows = new ArrayList<>();
 }

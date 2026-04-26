@@ -15,17 +15,10 @@ public class PaymentResponse {
 
     private String paymentId;
     private Long bookingId;
-
     private Double amount;
     private String paymentMethod;
-    private String status; // SUCCESS, FAILED, PENDING
-
+    private String status;
     private String transactionId;
-
-    private String message; // success/failure message
-
+    private String message;
     private LocalDateTime createdAt;
-
-    public PaymentResponse(boolean b, String s, String success) {
-    }
 }

@@ -1,5 +1,8 @@
 package com.digvijay.bookMyShow.dto;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -9,17 +12,20 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class ShowDTO {
+public class CreateShowRequest {
 
-    private Long id;
+    @NotNull
     private Long movieId;
-    private String movieTitle;
+
+    @NotNull
     private Long theatreId;
-    private String theatreName;
-    private String theatreCity;
-    private String theatreAddress;
+
+    @NotNull
     private LocalDateTime showDateTime;
+
+    @NotNull @Positive
     private Double basePrice;
+
+    @NotBlank
     private String showType;
-    private Integer availableSeats;
 }

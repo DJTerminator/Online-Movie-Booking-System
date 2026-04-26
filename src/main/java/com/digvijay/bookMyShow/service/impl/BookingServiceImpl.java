@@ -1,19 +1,12 @@
 package com.digvijay.bookMyShow.service.impl;
 
 import com.digvijay.bookMyShow.dto.*;
-import com.digvijay.bookMyShow.entity.Booking;
-import com.digvijay.bookMyShow.entity.Seat;
-import com.digvijay.bookMyShow.entity.Show;
-import com.digvijay.bookMyShow.entity.User;
+import com.digvijay.bookMyShow.entity.*;
 import com.digvijay.bookMyShow.enums.BookingStatus;
 import com.digvijay.bookMyShow.enums.SeatStatus;
 import com.digvijay.bookMyShow.enums.ShowType;
-import com.digvijay.bookMyShow.exceptions.BookingException;
-import com.digvijay.bookMyShow.exceptions.ResourceNotFoundException;
-import com.digvijay.bookMyShow.repository.BookingRepository;
-import com.digvijay.bookMyShow.repository.SeatRepository;
-import com.digvijay.bookMyShow.repository.ShowRepository;
-import com.digvijay.bookMyShow.repository.UserRepository;
+import com.digvijay.bookMyShow.exceptions.*;
+import com.digvijay.bookMyShow.repository.*;
 import com.digvijay.bookMyShow.service.BookingService;
 import com.digvijay.bookMyShow.service.DiscountService;
 import com.digvijay.bookMyShow.service.PaymentService;
@@ -21,9 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -39,223 +30,107 @@ public class BookingServiceImpl implements BookingService {
     private final UserRepository userRepository;
     private final DiscountService discountService;
     private final PaymentService paymentService;
-    private final User user;
-    private final Show show;
-    private static final int MAX_SEATS_PER_BOOKING = 10;
+
     private static final int LOCK_DURATION_MINUTES = 10;
 
+    /**
+     * PHASE 1: Lock seats and create a PENDING booking (10-min TTL).
+     * Uses PESSIMISTIC_WRITE (SELECT FOR UPDATE) to prevent race conditions.
+     */
     @Override
     @Transactional
-    public BookingResponse bookTickets(BookingRequest request, String username) {
+    public BookingResponse lockSeats(LockSeatsRequest request, String username) {
+        log.info(">>> lockSeats — user: {}, showId: {}, seats: {}", username, request.getShowId(), request.getSeatIds());
 
-        log.info("User: {}, Show ID: {}, Seat IDs: {}",
-                username, request.getShowId(), request.getSeatIds());
+        User user = findUserOrThrow(username);
+        Show show = findShowOrThrow(request.getShowId());
 
-        // Fetch user
-        log.debug("Fetching user details for username: {}", username);
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> {
-                    log.error("User not found: {}", username);
-                    return new ResourceNotFoundException("User not found: " + username);
-                });
-        log.debug("User found - ID: {}, Email: {}", user.getId(), user.getEmail());
+        if (show.getAvailableSeats() < request.getSeatIds().size()) {
+            throw new BookingException("Not enough available seats. Available: " + show.getAvailableSeats());
+        }
 
-        // Fetch show
-        log.debug("Fetching show details for Show ID: {}", request.getShowId());
-        Show show = showRepository.findById(request.getShowId())
-                .orElseThrow(() -> {
-                    log.error("Show not found - Show ID: {}", request.getShowId());
-                    return new ResourceNotFoundException("Show not found: " + request.getShowId());
-                });
-        log.info("Show found - Movie: {}, Theatre: {}, DateTime: {}, Available Seats: {}",
-                show.getMovie().getTitle(), show.getTheatre().getName(),
-                show.getShowDateTime(), show.getAvailableSeats());
-
-        // Fetch and validate seats
-        log.debug("Fetching {} seats", request.getSeatIds().size());
-        List<Seat> seats = seatRepository.findAllById(request.getSeatIds());
+        // CONCURRENCY: Pessimistic write lock
+        List<Seat> seats = seatRepository.findByShowIdAndSeatIdsWithLock(
+                request.getShowId(), request.getSeatIds());
 
         if (seats.size() != request.getSeatIds().size()) {
-            log.error("Seat count mismatch - Requested: {}, Found: {}",
-                    request.getSeatIds().size(), seats.size());
-            throw new BookingException("Some seats were not found");
+            throw new BookingException("Some seat IDs are invalid for this show");
         }
-        log.debug("All {} seats found successfully", seats.size());
 
-        // Validate all seats are available
-        log.debug("Validating seat availability");
-        validateSeatsAvailable(seats);
-        log.debug("All seats are available for booking");
-
-        // Calculate total amount
-        double totalAmount = seats.stream()
-                .mapToDouble(Seat::getPrice)
-                .sum();
-        log.info("Total amount calculated: ₹{} for {} seats", totalAmount, seats.size());
-
-        // Apply discount strategy
-        boolean isAfternoonShow = show.getShowType() == ShowType.AFTERNOON;
-        log.debug("Applying discount strategy - Afternoon Show: {}, Seat Count: {}", isAfternoonShow, seats.size());
-        double discount = discountService.calculateDiscount(totalAmount, seats.size(), isAfternoonShow);
-        log.info("Discount applied: ₹{} ({}%)", discount,
-                String.format("%.2f", (discount / totalAmount) * 100));
-
-        // Create booking
-        log.debug("Creating booking entity");
-        Booking booking = createBooking(user, show, seats, totalAmount, discount);
-
-        // Update seat status
-        log.debug("Updating seat status to BOOKED");
-        updateSeatStatus(seats, booking);
-
-        // Update show available seats
-        int previousAvailableSeats = show.getAvailableSeats();
-        show.setAvailableSeats(show.getAvailableSeats() - seats.size());
-        showRepository.save(show);
-        log.debug("Show available seats updated: {} -> {}",
-                previousAvailableSeats, show.getAvailableSeats());
-
-        // Save booking
-        booking = bookingRepository.save(booking);
-
-        log.info("=== Booking Completed Successfully ===");
-        log.info("Booking Reference: {}, Total Amount: ₹{}, Discount: ₹{}, Final Amount: ₹{}",
-                booking.getBookingReference(), booking.getTotalAmount(),
-                booking.getDiscountApplied(), booking.getFinalAmount());
-
-        return convertToBookingResponse(booking);
-    }
-
-    private void validateSeatsAvailable(List<Seat> seats) {
-        List<Seat> unavailableSeats = seats.stream()
-                .filter(seat -> seat.getStatus() != SeatStatus.AVAILABLE)
+        // Validate all requested seats are available (or have expired locks)
+        List<String> unavailable = seats.stream()
+                .filter(s -> !s.isAvailableForLocking())
+                .map(s -> s.getSeatNumber() + " (" + s.getStatus() + ")")
                 .collect(Collectors.toList());
 
-        if (!unavailableSeats.isEmpty()) {
-            String seatNumbers = unavailableSeats.stream()
-                    .map(Seat::getSeatNumber)
-                    .collect(Collectors.joining(", "));
-            log.error("Seat validation failed - Unavailable seats: {}", seatNumbers);
-            throw new BookingException("Seats not available: " + seatNumbers);
+        if (!unavailable.isEmpty()) {
+            throw new SeatAlreadyBookedException("Seats not available: " + unavailable);
         }
-    }
 
-    private Booking createBooking(User user, Show show, List<Seat> seats,
-                                  double totalAmount, double discount) {
+        // Lock all seats
+        LocalDateTime lockExpiry = LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES);
+        String userId = String.valueOf(user.getId());
+        for (Seat seat : seats) {
+            seat.setStatus(SeatStatus.LOCKED);
+            seat.setLockedBy(userId);
+            seat.setLockedAt(LocalDateTime.now());
+            seat.setLockExpiry(lockExpiry);
+        }
+        seatRepository.saveAll(seats);
+
+        // Calculate amounts — FIX: store GROSS totalAmount, discount separate
+        double grossTotal = seats.stream().mapToDouble(Seat::getPrice).sum();
+        boolean isAfternoon = show.getShowType() == ShowType.AFTERNOON;
+        double discount = discountService.calculateDiscount(grossTotal, seats.size(), isAfternoon);
+
+        // Create PENDING booking
         Booking booking = new Booking();
         booking.setUser(user);
         booking.setShow(show);
         booking.setSeats(seats);
         booking.setBookingDateTime(LocalDateTime.now());
-        booking.setTotalAmount(totalAmount - discount);
-        booking.setDiscountApplied(discount);
-        booking.setStatus(BookingStatus.CONFIRMED);
-        booking.setBookingReference(generateBookingReference());
-        return booking;
-    }
+        booking.setTotalAmount(grossTotal);         // FIX: Store GROSS amount
+        booking.setDiscountApplied(discount);       // FIX: Store discount separately
+        booking.setStatus(BookingStatus.PENDING);
+        booking.setBookingReference(generateReference());
+        booking.setLockExpiry(lockExpiry);
+        Booking saved = bookingRepository.save(booking);
 
-    private void updateSeatStatus(List<Seat> seats, Booking booking) {
-        seats.forEach(seat -> {
-            seat.setStatus(SeatStatus.BOOKED);
-            seat.setBooking(booking);
-            seatRepository.save(seat);
-        });
+        // Update each seat's booking reference
+        seats.forEach(s -> s.setBooking(saved));
+        seatRepository.saveAll(seats);
+
+        log.info("<<< Seats locked. BookingRef: {}, expires: {}", saved.getBookingReference(), lockExpiry);
+        return toResponse(saved, "Seats locked for 10 minutes. Complete payment to confirm.");
     }
 
     /**
-     * Generates a unique booking reference
+     * PHASE 2: Confirm booking — processes payment, marks seats BOOKED.
      */
-    private String generateBookingReference() {
-        return "BMS-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-    }
-
-    /** Converts booking entity to response DTO */
-    private BookingResponse convertToBookingResponse(Booking booking) {
-        BookingResponse response = new BookingResponse();
-        response.setBookingId(booking.getId());
-        response.setBookingReference(booking.getBookingReference());
-        response.setShowId(booking.getShow().getId());
-        response.setMovieTitle(booking.getShow().getMovie().getTitle());
-        response.setTheatreName(booking.getShow().getTheatre().getName());
-        response.setShowDateTime(booking.getShow().getShowDateTime());
-        response.setSeatNumbers(booking.getSeats().stream()
-                .map(Seat::getSeatNumber)
-                .collect(Collectors.toList()));
-        response.setTotalAmount(booking.getTotalAmount());
-        response.setDiscountApplied(booking.getDiscountApplied());
-        response.setStatus(booking.getStatus().name());
-        response.setBookingDateTime(booking.getBookingDateTime());
-        return response;
-    }
-
-
+    @Override
     @Transactional
-    public LockResult lockSeats(String showId, List<String> seatIds, String userId) {
-        // Validate seat count
-        if (seatIds.size() > MAX_SEATS_PER_BOOKING) {
-            return LockResult.failure("Maximum " + MAX_SEATS_PER_BOOKING + " seats allowed");
-        }
+    public BookingResponse confirmBooking(Long bookingId, PaymentRequest paymentRequest, String username) {
+        log.info(">>> confirmBooking — user: {}, bookingId: {}", username, bookingId);
 
-        // Acquire pessimistic locks
-        List<Seat> seats = seatRepository
-                .findByShowIdAndSeatIdsWithLock(showId, seatIds);
-
-        if (seats.size() != seatIds.size()) {
-            return LockResult.failure("Some seats not found");
-        }
-
-        // Check availability and lock
-        List<String> unavailableSeats = new ArrayList<>();
-        for (Seat seat : seats) {
-            if (!seat.tryLock(userId)) {
-                unavailableSeats.add(String.valueOf(seat.getId()));
-            }
-        }
-
-        if (!unavailableSeats.isEmpty()) {
-            // Rollback - unlock any seats we locked
-            for (Seat seat : seats) {
-                if (seat.isLockedBy(userId)) {
-                    seat.unlock();
-                }
-            }
-            return LockResult.failure("Seats unavailable: " + unavailableSeats);
-        }
-
-        seatRepository.saveAll(seats);
-
-        // Create pending booking
-        Booking booking = new Booking();
-        booking.setUser(user);
-        booking.setShow(show);
-        booking.setSeats(seats);
-        booking.setStatus(BookingStatus.PENDING);
-        booking.setTotalAmount(calculateTotal(seats));
-        booking.setLockExpiry(LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES));
-
-        bookingRepository.save(booking);
-
-        // Schedule expiry
-//        scheduleExpiry(booking.getId(), LOCK_DURATION_MINUTES);
-
-        return LockResult.success(booking);
-    }
-
-    @Transactional
-    public BookingResponse confirmBooking(Long bookingId, PaymentRequest paymentRequest) {
         Booking booking = bookingRepository.findById(bookingId)
-                .orElseThrow(() -> new BookingException("Book not found:{}"+ bookingId));
+                .orElseThrow(() -> new ResourceNotFoundException("Booking", bookingId));
 
-        // Validate booking state
+        // Security: ensure booking belongs to the requesting user
+        if (!booking.getUser().getUsername().equals(username)) {
+            throw new BookingException("Access denied: booking does not belong to you");
+        }
+
         if (booking.getStatus() != BookingStatus.PENDING) {
-            return BookingResponse.failure("Booking is not in pending state");
+            throw new BookingException("Booking is not in PENDING state. Current status: " + booking.getStatus());
         }
 
         if (booking.isExpired()) {
-            return BookingResponse.failure("Booking has expired. Please start over.");
+            expireBooking(booking);
+            throw new BookingException("Booking has expired. Please start a new booking.");
         }
 
         // Process payment
+        paymentRequest.setBookingId(bookingId);
         PaymentResponse paymentResponse = paymentService.processPayment(paymentRequest);
 
         if (!"SUCCESS".equalsIgnoreCase(paymentResponse.getStatus())) {
@@ -263,62 +138,227 @@ public class BookingServiceImpl implements BookingService {
         }
 
         // Confirm seats
-        for (Seat seat : booking.getSeats()) {
+        List<Seat> seats = seatRepository.findByBookingId(bookingId);
+        seats.forEach(seat -> {
+            if (!seat.getLockedBy().equals(String.valueOf(booking.getUser().getId()))) {
+                throw new SeatAlreadyBookedException("Seat " + seat.getSeatNumber() + " lock ownership mismatch");
+            }
             seat.setStatus(SeatStatus.BOOKED);
-            seat.setBooking(booking);
-        }
+            seat.setLockedBy(null);
+            seat.setLockedAt(null);
+            seat.setLockExpiry(null);
+        });
+        seatRepository.saveAll(seats);
 
+        // Update show seat count
+        Show show = booking.getShow();
+        show.setAvailableSeats(show.getAvailableSeats() - seats.size());
+        showRepository.save(show);
 
-        // Update booking
+        // Confirm booking
         booking.setStatus(BookingStatus.CONFIRMED);
         booking.setPaymentId(paymentResponse.getPaymentId());
         booking.setConfirmedAt(LocalDateTime.now());
-
         bookingRepository.save(booking);
-        seatRepository.saveAll(booking.getSeats());
 
-        // Notify (optional)
-        notifyConfirmed(booking);
-
-        // Return DTO (IMPORTANT)
-        return convertToBookingResponse(booking);
+        log.info("<<< Booking confirmed. Ref: {}, PaymentId: {}", booking.getBookingReference(), paymentResponse.getPaymentId());
+        return toResponse(booking, "Booking confirmed successfully!");
     }
 
+    /**
+     * Direct single-step booking (lock + pay atomically — for simple clients).
+     */
+    @Override
     @Transactional
-    public void handleExpiry(Long bookingId) {
-        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+    public BookingResponse bookTickets(BookingRequest request, String username) {
+        log.info(">>> bookTickets (direct) — user: {}, showId: {}, seats: {}", username, request.getShowId(), request.getSeatIds());
 
-        if (booking == null || booking.getStatus() != BookingStatus.PENDING) {
-            return; // Already processed
+        User user = findUserOrThrow(username);
+        Show show = findShowOrThrow(request.getShowId());
+
+        if (show.getAvailableSeats() < request.getSeatIds().size()) {
+            throw new BookingException("Not enough seats available. Available: " + show.getAvailableSeats());
+        }
+
+        // CONCURRENCY: Pessimistic write lock
+        List<Seat> seats = seatRepository.findByShowIdAndSeatIdsWithLock(
+                request.getShowId(), request.getSeatIds());
+
+        if (seats.size() != request.getSeatIds().size()) {
+            throw new BookingException("Some seat IDs are invalid");
+        }
+
+        // Validate availability
+        List<String> unavailable = seats.stream()
+                .filter(s -> !s.isAvailableForLocking())
+                .map(Seat::getSeatNumber)
+                .collect(Collectors.toList());
+        if (!unavailable.isEmpty()) {
+            throw new SeatAlreadyBookedException("Seats already booked or locked: " + unavailable);
+        }
+
+        // Calculate amounts
+        // FIX: Store GROSS in totalAmount; getFinalAmount() deducts discount
+        double grossTotal = seats.stream().mapToDouble(Seat::getPrice).sum();
+        boolean isAfternoon = show.getShowType() == ShowType.AFTERNOON;
+        double discount = discountService.calculateDiscount(grossTotal, seats.size(), isAfternoon);
+
+        // Create CONFIRMED booking directly
+        Booking booking = new Booking();
+        booking.setUser(user);
+        booking.setShow(show);
+        booking.setBookingDateTime(LocalDateTime.now());
+        booking.setTotalAmount(grossTotal);      // FIX: Gross amount
+        booking.setDiscountApplied(discount);    // FIX: Discount stored separately
+        booking.setStatus(BookingStatus.CONFIRMED);
+        booking.setBookingReference(generateReference());
+        booking.setConfirmedAt(LocalDateTime.now());
+        Booking saved = bookingRepository.save(booking);
+
+        // Mark seats as BOOKED
+        seats.forEach(seat -> {
+            seat.setStatus(SeatStatus.BOOKED);
+            seat.setBooking(saved);
+        });
+        seatRepository.saveAll(seats);
+        saved.setSeats(seats);
+
+        // Update available seat count
+        show.setAvailableSeats(show.getAvailableSeats() - seats.size());
+        showRepository.save(show);
+
+        log.info("<<< Direct booking confirmed. Ref: {}, Gross: ₹{}, Discount: ₹{}, Net: ₹{}",
+                saved.getBookingReference(), grossTotal, discount, saved.getFinalAmount());
+
+        return toResponse(saved, "Booking successful!");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BookingResponse getBookingById(Long bookingId, String username) {
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking", bookingId));
+        if (!booking.getUser().getUsername().equals(username)) {
+            throw new BookingException("Access denied");
+        }
+        return toResponse(booking, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BookingResponse getBookingByReference(String reference, String username) {
+        Booking booking = bookingRepository.findByBookingReference(reference)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found with reference: " + reference));
+        if (!booking.getUser().getUsername().equals(username)) {
+            throw new BookingException("Access denied");
+        }
+        return toResponse(booking, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BookingResponse> getMyBookings(String username) {
+        User user = findUserOrThrow(username);
+        return bookingRepository.findByUserIdWithDetails(user.getId()).stream()
+                .map(b -> toResponse(b, null))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public BookingResponse cancelBooking(Long bookingId, String username) {
+        log.info(">>> cancelBooking — user: {}, bookingId: {}", username, bookingId);
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking", bookingId));
+
+        if (!booking.getUser().getUsername().equals(username)) {
+            throw new BookingException("Access denied");
+        }
+
+        if (booking.getStatus() == BookingStatus.CANCELLED) {
+            throw new BookingException("Booking is already cancelled");
+        }
+        if (booking.getStatus() == BookingStatus.EXPIRED) {
+            throw new BookingException("Expired bookings cannot be cancelled");
         }
 
         // Release seats
-        for (Seat seat : booking.getSeats()) {
-            seat.unlock();
+        List<Seat> seats = seatRepository.findByBookingId(bookingId);
+        seats.forEach(seat -> {
+            seat.setStatus(SeatStatus.AVAILABLE);
+            seat.setBooking(null);
+            seat.setLockedBy(null);
+            seat.setLockedAt(null);
+            seat.setLockExpiry(null);
+        });
+        seatRepository.saveAll(seats);
+
+        // Restore available seats
+        Show show = booking.getShow();
+        if (booking.getStatus() == BookingStatus.CONFIRMED) {
+            show.setAvailableSeats(show.getAvailableSeats() + seats.size());
+            showRepository.save(show);
         }
 
-        booking.setStatus(BookingStatus.EXPIRED);
-
+        booking.setStatus(BookingStatus.CANCELLED);
+        booking.setCancelledAt(LocalDateTime.now());
         bookingRepository.save(booking);
-        seatRepository.saveAll(booking.getSeats());
+
+        log.info("<<< Booking cancelled. Ref: {}", booking.getBookingReference());
+        return toResponse(booking, "Booking cancelled successfully. Refund will be processed if applicable.");
     }
 
-    private double calculateTotal(List<Seat> seats) {
-        double subtotal = seats.stream()
-                .mapToDouble(Seat::getPrice)
-                .sum();
-        double convenienceFee = 1.50;
-        return subtotal + convenienceFee;
+    // Called by expiry scheduler
+    @Transactional
+    public void expireBooking(Booking booking) {
+        List<Seat> seats = seatRepository.findByBookingId(booking.getId());
+        seats.forEach(seat -> {
+            seat.setStatus(SeatStatus.AVAILABLE);
+            seat.setBooking(null);
+            seat.setLockedBy(null);
+            seat.setLockedAt(null);
+            seat.setLockExpiry(null);
+        });
+        seatRepository.saveAll(seats);
+        booking.setStatus(BookingStatus.EXPIRED);
+        bookingRepository.save(booking);
+        log.info("Booking expired: {}", booking.getBookingReference());
     }
 
-    private void notifyConfirmed(Booking booking) {
-//        for (BookingObserver observer : observers) {
-//            try {
-//                observer.onBookingConfirmed(booking);
-//            } catch (Exception e) {
-//                // Log but don't fail the booking
-//                log.error("Observer notification failed", e);
-//            }
-//        }
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private User findUserOrThrow(String username) {
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + username));
+    }
+
+    private Show findShowOrThrow(Long showId) {
+        return showRepository.findById(showId)
+                .orElseThrow(() -> new ResourceNotFoundException("Show", showId));
+    }
+
+    private String generateReference() {
+        return "BMS-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    private BookingResponse toResponse(Booking b, String message) {
+        List<Seat> seats = b.getSeats() != null ? b.getSeats() : List.of();
+        return BookingResponse.builder()
+                .bookingId(b.getId())
+                .bookingReference(b.getBookingReference())
+                .showId(b.getShow().getId())
+                .movieTitle(b.getShow().getMovie().getTitle())
+                .theatreName(b.getShow().getTheatre().getName())
+                .showDateTime(b.getShow().getShowDateTime())
+                .seatNumbers(seats.stream().map(Seat::getSeatNumber).collect(Collectors.toList()))
+                .totalAmount(b.getTotalAmount())
+                .discountApplied(b.getDiscountApplied())
+                .finalAmount(b.getFinalAmount())   // Computed: total - discount
+                .status(b.getStatus().name())
+                .bookingDateTime(b.getBookingDateTime())
+                .lockExpiry(b.getLockExpiry())
+                .paymentId(b.getPaymentId())
+                .message(message)
+                .build();
     }
 }

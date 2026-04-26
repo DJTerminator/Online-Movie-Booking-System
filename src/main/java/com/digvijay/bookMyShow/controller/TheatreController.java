@@ -1,31 +1,51 @@
 package com.digvijay.bookMyShow.controller;
 
-import com.digvijay.bookMyShow.entity.Theatre;
+import com.digvijay.bookMyShow.dto.TheatreDTO;
 import com.digvijay.bookMyShow.service.TheatreService;
-import lombok.NonNull;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
-@RequestMapping("/api/theatre")
+@RequestMapping("/api/theatres")
 @RequiredArgsConstructor
 @Slf4j
 public class TheatreController {
-    final private TheatreService theatreService;
 
-    public Long createTheatre(@NonNull final String theatreName) {
-        return theatreService.createTheatre(theatreName).getId();
+    private final TheatreService theatreService;
+
+    /** GET /api/theatres — List all theatres */
+    @GetMapping
+    public ResponseEntity<List<TheatreDTO>> getAllTheatres() {
+        log.info("GET /api/theatres");
+        return ResponseEntity.ok(theatreService.getAllTheatres());
     }
 
-    public String createScreenInTheatre(@NonNull final String screenName, @NonNull final String theatreId) {
-        final Theatre theatre = theatreService.getTheatre(theatreId);
-        return theatreService.createScreenInTheatre(screenName, theatre).getId();
+    /** GET /api/theatres/{id} */
+    @GetMapping("/{id}")
+    public ResponseEntity<TheatreDTO> getTheatreById(@PathVariable Long id) {
+        log.info("GET /api/theatres/{}", id);
+        return ResponseEntity.ok(theatreService.getTheatreById(id));
     }
 
-//    public String createSeatInScreen(@NonNull final Integer rowNo, @NonNull final Integer seatNo, @NonNull final String screenId) {
-//        final Screen screen = theatreService.getScreen(screenId);
-//        return theatreService.createSeatInScreen(rowNo, seatNo, screen).getId();
-//    }
+    /** GET /api/theatres/city/{city} */
+    @GetMapping("/city/{city}")
+    public ResponseEntity<List<TheatreDTO>> getTheatresByCity(@PathVariable String city) {
+        log.info("GET /api/theatres/city/{}", city);
+        return ResponseEntity.ok(theatreService.getTheatresByCity(city));
+    }
+
+    /** POST /api/theatres — Admin only */
+    @PostMapping
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<TheatreDTO> createTheatre(@Valid @RequestBody TheatreDTO request) {
+        log.info("POST /api/theatres — name: {}, city: {}", request.getName(), request.getCity());
+        return ResponseEntity.status(HttpStatus.CREATED).body(theatreService.createTheatre(request));
+    }
 }

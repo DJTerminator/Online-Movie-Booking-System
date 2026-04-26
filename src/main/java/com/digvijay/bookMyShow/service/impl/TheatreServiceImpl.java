@@ -1,65 +1,77 @@
 package com.digvijay.bookMyShow.service.impl;
 
-import com.digvijay.bookMyShow.entity.Screen;
+import com.digvijay.bookMyShow.dto.TheatreDTO;
 import com.digvijay.bookMyShow.entity.Theatre;
+import com.digvijay.bookMyShow.exceptions.BookingException;
 import com.digvijay.bookMyShow.exceptions.ResourceNotFoundException;
-import com.digvijay.bookMyShow.repository.ScreenRepository;
-import com.digvijay.bookMyShow.repository.SeatRepository;
 import com.digvijay.bookMyShow.repository.TheatreRepository;
 import com.digvijay.bookMyShow.service.TheatreService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;     // FIX: Was missing — not registered as a bean
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+import java.util.stream.Collectors;
 
-import java.util.UUID;
-
+@Service
 @RequiredArgsConstructor
+@Slf4j
 public class TheatreServiceImpl implements TheatreService {
 
     private final TheatreRepository theatreRepository;
-    private final ScreenRepository screenRepository;
-    private final SeatRepository seatRepository;
 
-    // Create Theatre
     @Override
-    public Theatre createTheatre(String theatreName) {
+    @Transactional(readOnly = true)
+    public List<TheatreDTO> getAllTheatres() {
+        return theatreRepository.findAll().stream().map(this::toDTO).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public TheatreDTO getTheatreById(Long id) {
+        return toDTO(findOrThrow(id));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TheatreDTO> getTheatresByCity(String city) {
+        log.info("Fetching theatres in city: {}", city);
+        return theatreRepository.findByCityIgnoreCase(city).stream()
+                .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public TheatreDTO createTheatre(TheatreDTO request) {
+
+        log.info("Creating theatre: {} in {}", request.getName(), request.getCity());
+        if (theatreRepository.existsByNameIgnoreCaseAndCityIgnoreCase(request.getName(), request.getCity())) {
+            throw new BookingException("Theatre '" + request.getName() + "' already exists in " + request.getCity());
+        }
 
         Theatre theatre = new Theatre();
-        theatre.setName(theatreName);
-
-        return theatreRepository.save(theatre);
+        theatre.setName(request.getName());
+        theatre.setCity(request.getCity());
+        theatre.setAddress(request.getAddress());
+        theatre.setTotalSeats(request.getTotalSeats());
+        Theatre saved = theatreRepository.save(theatre);
+        log.info("Theatre created with id: {}", saved.getId());
+        return toDTO(saved);
     }
 
-    // Get Theatre
-    @Override
-    public Theatre getTheatre(String theatreId) {
-        return theatreRepository.findById(Long.valueOf(theatreId))
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Theatre not found: " + theatreId));
+    private Theatre findOrThrow(Long id) {
+        return theatreRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Theatre", id));
     }
 
-    // Create Screen
-    @Override
-    public Screen createScreenInTheatre(String screenName, Theatre theatre) {
-
-        String screenId = UUID.randomUUID().toString();
-        Screen screen = new Screen(screenId, screenName, theatre);
-        return screenRepository.save(screen);
+    private TheatreDTO toDTO(Theatre t) {
+        TheatreDTO dto = new TheatreDTO();
+        dto.setId(t.getId());
+        dto.setName(t.getName());
+        dto.setCity(t.getCity());
+        dto.setAddress(t.getAddress());
+        dto.setTotalSeats(t.getTotalSeats());
+        return dto;
     }
-
-    //  Get Screen
-    @Override
-    public Screen getScreen(String screenId) {
-        return screenRepository.findById(screenId)
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Screen not found: " + screenId));
-    }
-
-        //  Create Seat
-//    @Override
-//    public Seat createSeatInScreen(Integer rowNo, Integer seatNo, Screen screen) {
-//
-//        String seatId = UUID.randomUUID().toString();
-//        Seat seat = new Seat(seatId, "R" + rowNo + "S" + seatNo, screen);
-//        screen.addSeat(seat); // maintain bidirectional relation
-//        return seatRepository.save(seat);
-//    }
 }

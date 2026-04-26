@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class SeatDTO {
+
     private Long id;
     private String seatNumber;
     private String seatType;

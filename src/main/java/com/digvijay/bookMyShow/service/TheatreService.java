@@ -1,17 +1,11 @@
 package com.digvijay.bookMyShow.service;
 
-import com.digvijay.bookMyShow.entity.Screen;
-import com.digvijay.bookMyShow.entity.Theatre;
+import com.digvijay.bookMyShow.dto.TheatreDTO;
+import java.util.List;
 
 public interface TheatreService {
-
-    Theatre createTheatre(String theatreName);
-
-    Theatre getTheatre(String theatreId);
-
-    Screen createScreenInTheatre(String screenName, Theatre theatre);
-
-    Screen getScreen(String screenId);
-
-//    Seat createSeatInScreen(Integer rowNo, Integer seatNo, Screen screen);
+    List<TheatreDTO> getAllTheatres();
+    TheatreDTO getTheatreById(Long id);
+    List<TheatreDTO> getTheatresByCity(String city);
+    TheatreDTO createTheatre(TheatreDTO request);
 }

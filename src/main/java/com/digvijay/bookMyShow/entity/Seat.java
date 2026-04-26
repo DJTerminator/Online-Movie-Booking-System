@@ -3,92 +3,71 @@ package com.digvijay.bookMyShow.entity;
 import com.digvijay.bookMyShow.enums.SeatStatus;
 import com.digvijay.bookMyShow.enums.SeatType;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.time.LocalDateTime;
 
-    @Entity
-    @Table(name = "seats")
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public class Seat {
+@Entity
+@Table(name = "seats", indexes = {
+        @Index(name = "idx_seat_show", columnList = "show_id"),
+        @Index(name = "idx_seat_status", columnList = "status")
+})
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@EqualsAndHashCode(exclude = {"show", "booking"})
+@ToString(exclude = {"show", "booking"})
+public class Seat {
 
-        @Id
-        @GeneratedValue(strategy = GenerationType.IDENTITY)
-        private Long id;
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-        @ManyToOne(fetch = FetchType.LAZY)
-        @JoinColumn(name = "show_id", nullable = false)
-        private Show show;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "show_id", nullable = false)
+    private Show show;
 
-        @Column(nullable = false)
-        private String seatNumber;
+    @Column(nullable = false)
+    private String seatNumber;
 
-        @Enumerated(EnumType.STRING)
-        @Column(nullable = false)
-        private SeatType seatType; // REGULAR, PREMIUM, VIP
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private SeatType seatType;
 
-        @Enumerated(EnumType.STRING)
-        @Column(nullable = false)
-        private SeatStatus status; // AVAILABLE, BOOKED, LOCKED
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private SeatStatus status;
 
-        @Column(nullable = false)
-        private Double price;
+    @Column(nullable = false)
+    private Double price;
 
-        @ManyToOne(fetch = FetchType.LAZY)
-        @JoinColumn(name = "booking_id")
-        private Booking booking;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "booking_id")
+    private Booking booking;
 
-        private String lockedBy;        // User ID who locked
-        private LocalDateTime lockedAt;
-        private LocalDateTime lockExpiry;
+    @Column(name = "locked_by")
+    private String lockedBy;
 
-        @Version  // For optimistic locking as backup
-        private Long version;
+    @Column(name = "locked_at")
+    private LocalDateTime lockedAt;
 
-        public synchronized boolean tryLock(String userId) {
-            if (status != SeatStatus.AVAILABLE) {
-                // Check if lock has expired
-                if (status == SeatStatus.LOCKED && isLockExpired()) {
-                    // Lock expired, can be re-locked
-                    unlock();
-                } else {
-                    return false;
-                }
-            }
+    @Column(name = "lock_expiry")
+    private LocalDateTime lockExpiry;
 
-            this.status = SeatStatus.LOCKED;
-            this.lockedBy = userId;
-            this.lockedAt = LocalDateTime.now();
-            this.lockExpiry = LocalDateTime.now().plusMinutes(10);
-            return true;
-        }
+    // Optimistic locking — prevents concurrent modifications at DB level
+    @Version
+    private Long version;
 
-        public synchronized void unlock() {
-            if (status == SeatStatus.LOCKED) {
-                this.status = SeatStatus.AVAILABLE;
-                this.lockedBy = null;
-                this.lockedAt = null;
-                this.lockExpiry = null;
-            }
-        }
-
-        public synchronized boolean book(String userId) {
-            if (status != SeatStatus.LOCKED || !userId.equals(lockedBy)) {
-                return false;
-            }
-            this.status = SeatStatus.BOOKED;
-            return true;
-        }
-
-        public boolean isLockExpired() {
-            return lockExpiry != null && LocalDateTime.now().isAfter(lockExpiry);
-        }
-
-        public boolean isLockedBy(String userId) {
-            return status == SeatStatus.LOCKED && userId.equals(lockedBy);
-        }
+    public boolean isLockExpired() {
+        return lockExpiry != null && LocalDateTime.now().isAfter(lockExpiry);
     }
+
+    public boolean isLockedBy(String userId) {
+        return status == SeatStatus.LOCKED && userId.equals(lockedBy);
+    }
+
+    public boolean isAvailableForLocking() {
+        return status == SeatStatus.AVAILABLE ||
+                (status == SeatStatus.LOCKED && isLockExpired());
+    }
+}

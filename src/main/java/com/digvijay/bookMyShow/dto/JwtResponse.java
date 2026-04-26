@@ -10,6 +10,7 @@ import java.util.Set;
 @NoArgsConstructor
 @AllArgsConstructor
 public class JwtResponse {
+
     private String token;
     private String type = "Bearer";
     private Long id;

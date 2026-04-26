@@ -19,23 +19,23 @@ import java.time.LocalDateTime;
 public class Payment {
 
     @Id
-    @Column(name = "id", nullable = false, unique = true)
-    private String id; // UUID (recommended)
+    @Column(nullable = false, unique = true)
+    private String id; // UUID
 
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "booking_id", nullable = false)
     private Booking booking;
 
     @Column(nullable = false)
-    private double amount;
+    private Double amount;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private PaymentMethod method; // CARD, UPI, NETBANKING, WALLET
+    private PaymentMethod method;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private PaymentStatus status; // PENDING, SUCCESS, FAILED
+    private PaymentStatus status;
 
     @Column(name = "transaction_id", unique = true)
     private String transactionId;
@@ -46,11 +46,10 @@ public class Payment {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    // Auto timestamps
     @PrePersist
     public void onCreate() {
         this.createdAt = LocalDateTime.now();
-        this.status = PaymentStatus.PENDING;
+        if (this.status == null) this.status = PaymentStatus.PENDING;
     }
 
     @PreUpdate

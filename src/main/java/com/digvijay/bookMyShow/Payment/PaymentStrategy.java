@@ -10,5 +10,5 @@ public interface PaymentStrategy {
 
     PaymentResponse process(double amount, PaymentRequest request);
 
-    void refund(String transactionId, double amount);
+    PaymentResponse refund(String transactionId, double amount);
 }
