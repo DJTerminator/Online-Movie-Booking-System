@@ -29,6 +29,28 @@ jwt:
   secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
   expiration: 86400000 # 24 hours in milliseconds
 
+  # Cache — Caffeine in-process (no Redis required)
+  # Spring Boot auto-configures CaffeineCacheManager when caffeine jar is present.
+  # No manual Caffeine API code needed — spec string is parsed internally by Spring.
+  cache:
+    type: caffeine
+    cache-names:
+      - movies          # @Cacheable("movies") — getAllMovies()
+      - shows           # @Cacheable("shows")  — browseShows()
+    caffeine:
+      # Spec format: maximumSize=N,expireAfterWrite=Xs
+      # Both caches share this spec. 10-min TTL is safe because
+      # @CacheEvict on write operations (create/update/delete/book/cancel)
+      # keeps both caches fresh immediately after any mutation.
+      spec: maximumSize=1000,expireAfterWrite=600s
+
+# Rate Limiting — Bucket4j (token bucket per IP)
+rate-limit:
+  booking:
+    capacity: 3          # max 10 tokens in bucket
+    refill-tokens: 3    # refill 10 tokens…
+    refill-minutes: 1     # …every 1 minute  → 10 requests/min per IP
+
 # Server Configuration
 server:
   port: 8080

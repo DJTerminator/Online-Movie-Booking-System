@@ -1,19 +1,29 @@
 package com.digvijay.bookMyShow.service.impl;
 
 import com.digvijay.bookMyShow.dto.*;
-import com.digvijay.bookMyShow.entity.*;
+import com.digvijay.bookMyShow.entity.Booking;
+import com.digvijay.bookMyShow.entity.Seat;
+import com.digvijay.bookMyShow.entity.Show;
+import com.digvijay.bookMyShow.entity.User;
 import com.digvijay.bookMyShow.enums.BookingStatus;
 import com.digvijay.bookMyShow.enums.SeatStatus;
 import com.digvijay.bookMyShow.enums.ShowType;
-import com.digvijay.bookMyShow.exceptions.*;
-import com.digvijay.bookMyShow.repository.*;
+import com.digvijay.bookMyShow.exceptions.BookingException;
+import com.digvijay.bookMyShow.exceptions.ResourceNotFoundException;
+import com.digvijay.bookMyShow.exceptions.SeatAlreadyBookedException;
+import com.digvijay.bookMyShow.repository.BookingRepository;
+import com.digvijay.bookMyShow.repository.SeatRepository;
+import com.digvijay.bookMyShow.repository.ShowRepository;
+import com.digvijay.bookMyShow.repository.UserRepository;
 import com.digvijay.bookMyShow.service.BookingService;
 import com.digvijay.bookMyShow.service.DiscountService;
 import com.digvijay.bookMyShow.service.PaymentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -109,6 +119,8 @@ public class BookingServiceImpl implements BookingService {
      */
     @Override
     @Transactional
+    // Evict shows cache: availableSeats is decremented here, cached browse results become stale
+    @CacheEvict(value = "shows", allEntries = true)
     public BookingResponse confirmBooking(Long bookingId, PaymentRequest paymentRequest, String username) {
         log.info(">>> confirmBooking — user: {}, bookingId: {}", username, bookingId);
 
@@ -170,6 +182,7 @@ public class BookingServiceImpl implements BookingService {
      */
     @Override
     @Transactional
+    @CacheEvict(value = "shows", allEntries = true)
     public BookingResponse bookTickets(BookingRequest request, String username) {
         log.info(">>> bookTickets (direct) — user: {}, showId: {}, seats: {}", username, request.getShowId(), request.getSeatIds());
 
@@ -266,6 +279,8 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
+    // Evict shows cache: availableSeats is restored here, cached browse results become stale
+    @CacheEvict(value = "shows", allEntries = true)
     public BookingResponse cancelBooking(Long bookingId, String username) {
         log.info(">>> cancelBooking — user: {}, bookingId: {}", username, bookingId);
         Booking booking = bookingRepository.findById(bookingId)

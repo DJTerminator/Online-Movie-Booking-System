@@ -3,15 +3,24 @@ package com.digvijay.bookMyShow.service.impl;
 import com.digvijay.bookMyShow.dto.CreateShowRequest;
 import com.digvijay.bookMyShow.dto.SeatDTO;
 import com.digvijay.bookMyShow.dto.ShowDTO;
-import com.digvijay.bookMyShow.entity.*;
+import com.digvijay.bookMyShow.entity.Movie;
+import com.digvijay.bookMyShow.entity.Seat;
+import com.digvijay.bookMyShow.entity.Show;
+import com.digvijay.bookMyShow.entity.Theatre;
 import com.digvijay.bookMyShow.enums.ShowType;
 import com.digvijay.bookMyShow.exceptions.ResourceNotFoundException;
-import com.digvijay.bookMyShow.repository.*;
+import com.digvijay.bookMyShow.repository.MovieRepository;
+import com.digvijay.bookMyShow.repository.SeatRepository;
+import com.digvijay.bookMyShow.repository.ShowRepository;
+import com.digvijay.bookMyShow.repository.TheatreRepository;
 import com.digvijay.bookMyShow.service.ShowService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -28,10 +37,28 @@ public class ShowServiceImpl implements ShowService {
     private final TheatreRepository theatreRepository;
     private final SeatRepository seatRepository;
 
+    /**
+     * Cached: composite key  movieId:city:date  in cache "shows".
+     * Example key: "1:Bengaluru:2025-04-26"
+     *
+     * Cache TTL = 5 minutes (set in CacheConfig) because availableSeats
+     * changes on every confirmed booking and cancellation.
+     *
+     * Eviction happens in:
+     *   - createShow()                  → new show added, cache stale
+     *   - BookingServiceImpl.confirmBooking() / bookTickets()  → availableSeats decremented
+     *   - BookingServiceImpl.cancelBooking()                   → availableSeats restored
+     *
+     * NOTE: We evict ALL shows cache entries (allEntries=true) on mutations
+     * because we cannot cheaply compute which movieId:city:date keys are
+     * affected without an extra DB lookup.
+     */
+
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(value = "shows", key = "#movieId + ':' + #city + ':' + #date")
     public List<ShowDTO> browseShows(Long movieId, String city, LocalDate date) {
-        log.info("Browsing shows — movie: {}, city: {}, date: {}", movieId, city, date);
+        log.info("Cache MISS — fetching shows from DB: movie={}, city={}, date={}", movieId, city, date);
         movieRepository.findById(movieId)
                 .orElseThrow(() -> new ResourceNotFoundException("Movie", movieId));
 
@@ -53,8 +80,9 @@ public class ShowServiceImpl implements ShowService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "shows", allEntries = true)
     public ShowDTO createShow(CreateShowRequest request) {
-        log.info("Creating show for movie: {}, theatre: {}", request.getMovieId(), request.getTheatreId());
+        log.info("Creating show — cache 'shows' fully evicted");
         Movie movie = movieRepository.findById(request.getMovieId())
                 .orElseThrow(() -> new ResourceNotFoundException("Movie", request.getMovieId()));
         Theatre theatre = theatreRepository.findById(request.getTheatreId())

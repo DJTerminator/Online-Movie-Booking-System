@@ -8,9 +8,12 @@ import com.digvijay.bookMyShow.repository.MovieRepository;
 import com.digvijay.bookMyShow.service.MovieService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -21,8 +24,14 @@ public class MovieServiceImpl implements MovieService {
 
     private final MovieRepository movieRepository;
 
+    /**
+     * Cached: key "allMovies" in cache "movies".
+     * Served from Caffeine on repeated calls — no DB hit.
+     * Evicted whenever createMovie(), updateMovie(), or deleteMovie() is called.
+     */
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(value = "movies", key = "'allMovies'")
     public List<MovieDTO> getAllMovies() {
         log.info("Fetching all active movies");
         return movieRepository.findByActiveTrue().stream()
@@ -39,8 +48,9 @@ public class MovieServiceImpl implements MovieService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "movies", key = "'allMovies'")
     public MovieDTO createMovie(MovieDTO request) {
-        log.info("Creating movie: {}", request.getTitle());
+        log.info("Creating movie: {} — cache 'movies' evicted", request.getTitle());
         if (movieRepository.existsByTitleIgnoreCase(request.getTitle())) {
             throw new BookingException("Movie with title '" + request.getTitle() + "' already exists");
         }
@@ -59,6 +69,7 @@ public class MovieServiceImpl implements MovieService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "movies", key = "'allMovies'")
     public MovieDTO updateMovie(Long id, MovieDTO request) {
         Movie movie = findOrThrow(id);
         movie.setTitle(request.getTitle());
@@ -72,6 +83,7 @@ public class MovieServiceImpl implements MovieService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "movies", key = "'allMovies'")
     public void deleteMovie(Long id) {
         Movie movie = findOrThrow(id);
         movie.setActive(false); // Soft delete

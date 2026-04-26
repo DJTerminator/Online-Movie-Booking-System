@@ -32,6 +32,8 @@ public class SecurityConfig {
 
     private final UserService userService;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    // Rate-limit filter applied to POST/DELETE /api/bookings/** before JWT validation
+    private final BookingRateLimitFilter bookingRateLimitFilter;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -79,6 +81,8 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())
+                // Rate limiter runs BEFORE JWT validation so unauthenticated floods are also caught
+                .addFilterBefore(bookingRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .headers(headers -> headers.frameOptions(HeadersConfigurer.FrameOptionsConfig::sameOrigin));
 
